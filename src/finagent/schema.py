@@ -35,6 +35,7 @@ class Col(StrEnum):
     DESCRIPTION = "description"
     ACTIVITY = "activity"
     LINE = "line"
+    CLASS_SOURCE = "class_source"  # "rule" | "manual" | "model"
     SOURCE_FILE = "source_file"
     SOURCE_ROW = "source_row"
 
