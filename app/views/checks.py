@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
-from state import KEY_OVERRIDES, clear_overrides, set_override
+from state import KEY_OVERRIDES, clear_overrides, get_classifier, set_override
 from ui import SEVERITY_ICON, SEVERITY_LABEL, mnt, page_header, require_analysis
 
 from finagent.checks import RULES
@@ -20,7 +20,8 @@ for col, s in zip(c, ("high", "medium", "low"), strict=False):
     col.metric(f"{SEVERITY_ICON[s]} {SEVERITY_LABEL[s]}", counts[s])
 c[3].metric("Үлдэгдлийн тулгалт", "Тулгарсан" if a.reconciled else "Зөрүүтэй")
 
-tab_issues, tab_ledger = st.tabs(["Анхааруулга", "Гүйлгээ ба ангилал"])
+tab_issues, tab_ledger, tab_model = st.tabs(
+    ["Анхааруулга", "Гүйлгээ ба ангилал", "Загварын санал (DM1)"])
 
 with tab_issues:
     f1, f2 = st.columns(2)
@@ -83,3 +84,44 @@ with tab_ledger:
         st.dataframe(pd.DataFrame(
             [{"txn_id": k, "line": v, "ангилал": line_label(v)} for k, v in ov.items()]),
             hide_index=True)
+
+with tab_model:
+    from finagent.ml.classifier import CONFIDENCE_THRESHOLD, suggest
+
+    st.caption("TF-IDF + Logistic Regression загвар ангилагдаагүй, загвараар ангилсан болон "
+               "түлхүүр үгээр ангилсан гүйлгээнд санал гаргана. Итгэл "
+               f"≥ {CONFIDENCE_THRESHOLD:.0%} бол автоматаар хэрэглэгдсэн ('model'); бусдыг "
+               "хүн батална. Баталсан засвар нь дараагийн сургалтын шошго болно.")
+    led = a.ledger
+    target = led[(led["activity"] == "unclassified") | (led["class_source"] == "model")
+                 | led["src_category"].isna()]
+    if target.empty:
+        st.success("Загварын санал шаардлагатай гүйлгээ алга — бүх гүйлгээ нягтлангийн "
+                   "ангилалтай.")
+    else:
+        sug = suggest(get_classifier(), target).merge(
+            target[["txn_id", "date", "amount", "direction", "description", "line",
+                    "class_source"]], on="txn_id")
+        sug.insert(0, "Батлах", ~sug["confident"] & (sug["predicted"] != sug["line"]))
+        edited_s = st.data_editor(
+            sug[["Батлах", "txn_id", "date", "amount", "direction", "description", "line",
+                 "predicted", "proba", "class_source"]],
+            hide_index=True, use_container_width=True, disabled=["txn_id", "date", "amount",
+                                                                  "direction", "description",
+                                                                  "line", "proba",
+                                                                  "class_source"],
+            column_config={
+                "proba": st.column_config.ProgressColumn("Итгэл", min_value=0, max_value=1,
+                                                         format="percent"),
+                "predicted": st.column_config.SelectboxColumn(
+                    "Загварын санал", options=[ln.value for ln in Line]),
+                "line": "Одоогийн", "amount": st.column_config.NumberColumn(format="%,.0f"),
+            },
+            key="model_editor",
+        )
+        chosen = edited_s[edited_s["Батлах"]]
+        if st.button(f"Сонгосон {len(chosen)} саналыг батлах", type="primary",
+                     disabled=chosen.empty):
+            for r in chosen.itertuples(index=False):
+                set_override(r.txn_id, r.predicted)
+            st.rerun()

@@ -173,6 +173,10 @@ _LINE_DIRECTION = {
 }
 
 
+def line_direction(line: str) -> str:
+    return _LINE_DIRECTION.get(Line(line), OUT)
+
+
 def apply_overrides(ledger: pd.DataFrame, overrides: dict[str, str] | None) -> pd.DataFrame:
     """Хүний баталсан ангиллыг хэрэглэж, activity/direction/signed_amount-ийг дахин тооцно."""
     ledger = ledger.copy()

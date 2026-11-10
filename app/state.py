@@ -64,12 +64,26 @@ def sample_balances() -> pd.DataFrame:
     return load_balances(SAMPLE_DIR / "balances.csv")
 
 
+@st.cache_resource(show_spinner="Ангиллын загвар сургаж байна…")
+def get_classifier(_version: int = 0):
+    """DM1: жишээ өгөгдөл + хадгалсан компаниудын нягтлан/хүний баталсан ангилал дээр сургана."""
+    from finagent.classify import load_ledger
+    from finagent.ml.classifier import train
+
+    frames = [load_ledger(sorted(SAMPLE_DIR.glob("transactions_*.xlsx")))]
+    store = get_store()
+    for name in store.list_companies():
+        led = store.load_ledger(name)
+        frames.append(led[led["src_category"].notna() | (led["class_source"] == "manual")])
+    return train(pd.concat(frames, ignore_index=True))
+
+
 @st.cache_data(show_spinner="Тооцоолж байна…")
 def _analyze(files: tuple[tuple[str, bytes], ...], balances_csv: str | None,
              overrides: tuple[tuple[str, str], ...]) -> Analysis:
     balances = pd.read_csv(io.StringIO(balances_csv), dtype={"month": str}) \
         if balances_csv else None
-    a = Analysis.from_files(list(files), balances, dict(overrides))
+    a = Analysis.from_files(list(files), balances, dict(overrides), classifier=get_classifier())
     # cached_property-г урьдчилан тооцож кэшэд хадгална
     _ = a.summary, a.issues, a.forecast, a.confidence, a.safe_ledger
     return a

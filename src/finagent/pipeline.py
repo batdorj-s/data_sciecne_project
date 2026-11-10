@@ -14,7 +14,7 @@ import pandas as pd
 
 from .anonymize import anonymize_frame
 from .checks import Issue, reconciled, run_checks
-from .classify import build_ledger
+from .classify import apply_overrides, build_ledger
 from .forecast import Forecast, baseline_forecast, confidence_level
 from .ingest import ParsedFile, read_many
 from .reports import monthly_summary
@@ -29,13 +29,22 @@ class Analysis:
     ledger: pd.DataFrame
     balances: pd.DataFrame | None = None
     files: list[ParsedFile] = field(default_factory=list)
+    anomaly: bool = True  # DM2 Isolation Forest-ийг шалгалтад нэмэх
 
     @classmethod
     def from_files(cls, files: list[ParsedFile] | list[Path] | list[tuple[str, bytes]],
                    balances: pd.DataFrame | None = None,
-                   overrides: dict[str, str] | None = None) -> Analysis:
+                   overrides: dict[str, str] | None = None,
+                   classifier=None) -> Analysis:
+        """classifier: DM1 загвар. Ангилалгүй (банкны экспорт) мөрөнд итгэлтэй таамгийг
+        `class_source="model"` болгон хэрэглэнэ; хүний засвар үргэлж давамгайлна."""
         parsed = files if files and isinstance(files[0], ParsedFile) else read_many(files)
-        return cls(build_ledger(parsed, overrides), balances, list(parsed))
+        ledger = build_ledger(parsed)
+        if classifier is not None:
+            from .ml.classifier import apply_model
+
+            ledger = apply_model(classifier, ledger)
+        return cls(apply_overrides(ledger, overrides), balances, list(parsed))
 
     @cached_property
     def safe_ledger(self) -> pd.DataFrame:
@@ -50,7 +59,14 @@ class Analysis:
     @cached_property
     def issues(self) -> list[Issue]:
         # Нууцалсан ledger дээр ажиллуулна: мессеж дэх тайлбарт хувь хүний нэр гарахгүй
-        return run_checks(self.safe_ledger, self.balances)
+        issues = run_checks(self.safe_ledger, self.balances)
+        if self.anomaly:
+            from .checks import SEVERITY_ORDER
+            from .ml.anomaly import detect
+
+            issues = sorted(issues + detect(self.safe_ledger),
+                            key=lambda i: (SEVERITY_ORDER[i.severity], i.rule, i.month or ""))
+        return issues
 
     @cached_property
     def forecast(self) -> Forecast:
