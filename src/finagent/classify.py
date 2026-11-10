@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 from collections.abc import Iterable
 
 import pandas as pd
@@ -73,6 +75,41 @@ def classify_row(category: str | None, subcategory: str | None,
     return OUT, Line.UNCLASSIFIED_OUT
 
 
+# Ангилалгүй банкны хуулгад зориулсан түлхүүр үгийн дүрэм (DM1 загварын жишиг)
+_KEYWORDS: list[tuple[str, str | None, Line]] = [
+    # (regex, чиглэл [None = аль ч], мөр)
+    (r"касс", "out", Line.TRANSFER_TO_CASH),
+    (r"цалин|tsalin|salary|ндш|ndsh", "out", Line.PAYROLL),
+    (r"түрээс|turees|rent", "out", Line.RENT),
+    (r"түрээс|turees|rent", "in", Line.OTHER_INCOME),
+    (r"зээл|zeel|loan", "out", Line.LOAN_REPAYMENT),
+    (r"эздийн зээл|ezdiin zeel", "in", Line.OWNER_LOAN_IN),
+    (r"шимтгэл|shimtgel|fee|татвар|tatvar|ehs|ebarimt", "out", Line.OPEX),
+    (r"оффис|office|кофе|coffee|ус захиалга|us zahialga", "out", Line.OFFICE),
+    (r"төсөл|tusul|tusliin|зураг авалт|zurag awalt|sponsor|зар сурталчилгаа", "out",
+     Line.PROJECT),
+    (r"subscription|эрх|erh|taxi|такси", "out", Line.OPEX),
+]
+
+
+def classify_by_keywords(description: str | None, direction: str) -> Line:
+    desc = _norm(description)
+    for pattern, d, line in _KEYWORDS:
+        if (d is None or d == direction) and re.search(pattern, desc):
+            return line
+    return Line.SALES if direction == IN else Line.UNCLASSIFIED_OUT
+
+
+def _txn_key(month: str | None, r, seen: dict[str, int]) -> str:
+    """Мөрийн дугаараас хамааралгүй тогтвортой id: огноо, дүн, тайлбар, ангиллын hash.
+    Яг ижил гүйлгээ давтагдвал -2, -3 дагавар авна."""
+    raw = f"{r.date}|{r.amount}|{r.description}|{r.src_category}|{r.src_subcategory}"
+    h = hashlib.sha1(raw.encode()).hexdigest()[:8]
+    base = f"{month or 'NA'}-{h}"
+    seen[base] = seen.get(base, 0) + 1
+    return base if seen[base] == 1 else f"{base}-{seen[base]}"
+
+
 def build_ledger(
     files: Iterable[ParsedFile],
     overrides: dict[str, str] | None = None,
@@ -88,15 +125,22 @@ def build_ledger(
             continue
         month_fallback = f"{pf.year:04d}-{pf.month:02d}" if pf.year and pf.month else None
         rows = []
+        seen: dict[str, int] = {}
         for r in df.itertuples(index=False):
-            amount = r.amount
-            direction, line = classify_row(r.src_category, r.src_subcategory, r.description)
-            if pd.notna(amount) and amount < 0:  # тэмдэгтэй хуулга ирвэл
-                amount = -amount
+            amount = abs(r.amount) if pd.notna(r.amount) else r.amount
+            raw_dir = getattr(r, "direction_raw", None)
+            if r.src_category:
+                direction, line = classify_row(r.src_category, r.src_subcategory, r.description)
+                if raw_dir in (IN, OUT) and raw_dir != direction:
+                    # Банкны чиглэл үнэн; зөрвөл ангиллыг түлхүүр үгээр дахин тогтооно
+                    direction, line = raw_dir, classify_by_keywords(r.description, raw_dir)
+            else:
+                direction = raw_dir if raw_dir in (IN, OUT) else OUT
+                line = classify_by_keywords(r.description, direction)
             d = pd.Timestamp(r.date) if r.date is not None else pd.NaT
             month = d.strftime("%Y-%m") if pd.notna(d) else month_fallback
             rows.append({
-                Col.TXN_ID: f"{month or 'NA'}-{int(r.source_row):03d}",
+                Col.TXN_ID: _txn_key(month, r, seen),
                 Col.DATE: d,
                 Col.MONTH: month,
                 Col.COUNTERPARTY: r.counterparty,

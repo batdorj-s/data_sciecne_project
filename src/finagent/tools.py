@@ -245,7 +245,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "get_data_issues",
-        "description": "R1–R8 шалгалтын анхааруулга. Итгэлийн түвшин тогтооход.",
+        "description": "R1–R9 шалгалтын анхааруулга. Итгэлийн түвшин тогтооход.",
         "input_schema": {
             "type": "object",
             "properties": {"min_severity": {"type": "string", "enum": ["high", "medium", "low"]}},

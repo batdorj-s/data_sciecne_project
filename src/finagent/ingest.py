@@ -23,8 +23,6 @@ from typing import BinaryIO
 
 import pandas as pd
 
-from .schema import RAW_COLUMNS, REQUIRED_RAW
-
 _MONTHS_EN = {
     m: i
     for i, m in enumerate(
@@ -33,6 +31,42 @@ _MONTHS_EN = {
 }
 _TITLE_RE = re.compile(r"(\d{4})\s*оны\s*(\d{1,2})")
 _FILENAME_RE = re.compile(r"(\d{4})[_-](\d{1,2})")
+
+
+# Баганын нэрийн хувилбарууд: бэлтгэсэн хүснэгт ба банкны хуулгын экспорт
+COLUMN_ALIASES: dict[str, list[str]] = {
+    "date_raw": ["Өдөр", "Огноо", "Гүйлгээний огноо", "Date", "Transaction date"],
+    "counterparty": ["Харилцагч", "Харьцсан дансны нэр", "Харьцсан данс", "Хүлээн авагч",
+                     "Counterparty"],
+    "amount_raw": ["Дүн", "Гүйлгээний дүн", "Amount"],
+    "debit_raw": ["Дебит", "Гарсан", "Зарлага", "Debit"],
+    "credit_raw": ["Кредит", "Орсон", "Орлого", "Credit"],
+    "src_category": ["Ангилал", "Category"],
+    "src_subcategory": ["Дэд ангилал", "Subcategory"],
+    "description": ["Тайлбар", "Гүйлгээний утга", "Утга", "Description"],
+}
+
+
+def _norm_header(v) -> str:
+    return " ".join(str(v).split()).lower() if pd.notna(v) else ""
+
+
+_ALIAS_LOOKUP = {a.lower(): key for key, names in COLUMN_ALIASES.items() for a in names}
+
+
+def _map_header(cells: list) -> dict[int, str]:
+    """Баганын индекс → дотоод нэр. Нэг нэрийг эхний тохиолдлоор авна."""
+    out: dict[int, str] = {}
+    for i, c in enumerate(cells):
+        key = _ALIAS_LOOKUP.get(_norm_header(c))
+        if key and key not in out.values():
+            out[i] = key
+    return out
+
+
+def _is_header(mapping: dict[int, str]) -> bool:
+    keys = set(mapping.values())
+    return "date_raw" in keys and ("amount_raw" in keys or {"debit_raw", "credit_raw"} <= keys)
 
 
 class IngestError(ValueError):
@@ -44,8 +78,9 @@ class ParsedFile:
     name: str
     year: int | None
     month: int | None
-    frame: pd.DataFrame  # RAW_COLUMNS-ийн англи нэртэй баганууд + source_row
+    frame: pd.DataFrame  # дотоод нэртэй баганууд + direction_raw + source_row
     warnings: list[str] = field(default_factory=list)
+    fmt: str = "prepared"  # "prepared" (ангилалтай) | "bank" (банкны экспорт)
 
 
 def _period_from_text(text: str) -> tuple[int | None, int | None]:
@@ -106,14 +141,15 @@ def read_statement(
         name = Path(source).name if isinstance(source, (str, Path)) else "uploaded.xlsx"
 
     grid = _read_grid(source, name)
-    header_idx = None
+    header_idx, mapping = None, {}
     for i in range(min(len(grid), 30)):
-        cells = [str(c).strip() for c in grid.iloc[i].tolist() if pd.notna(c)]
-        if "Өдөр" in cells and "Дүн" in cells:
-            header_idx = i
+        m = _map_header(grid.iloc[i].tolist())
+        if _is_header(m):
+            header_idx, mapping = i, m
             break
     if header_idx is None:
-        raise IngestError(f"{name}: 'Өдөр', 'Дүн' баганатай толгой мөр олдсонгүй.")
+        raise IngestError(f"{name}: огноо ба дүнгийн (эсвэл дебит/кредит) баганатай толгой мөр "
+                          "олдсонгүй.")
 
     title = " ".join(str(c) for c in grid.iloc[:header_idx].stack().tolist())
     y, mo = _period_from_text(title)
@@ -121,23 +157,18 @@ def read_statement(
         y, mo = _period_from_filename(name)
     y = year or y
 
-    header = [str(c).strip() if pd.notna(c) else "" for c in grid.iloc[header_idx].tolist()]
-    missing = [c for c in REQUIRED_RAW if c not in header]
-    if missing:
-        raise IngestError(f"{name}: заавал байх багана алга: {', '.join(missing)}")
-
-    body = grid.iloc[header_idx + 1 :].copy()
-    body.columns = header
+    body = grid.iloc[header_idx + 1:, list(mapping)].copy()
+    body.columns = list(mapping.values())
     # Эхний бүрэн хоосон мөрөөр таслана (доор нь нийлбэрийн томьёо байдаг)
     blank = body.isna().all(axis=1).to_numpy()
     if blank.any():
         body = body.iloc[: int(blank.argmax())]
-    body = body[[c for c in RAW_COLUMNS if c in header]].rename(columns=RAW_COLUMNS)
-    for c in RAW_COLUMNS.values():
+    for c in COLUMN_ALIASES:
         if c not in body:
             body[c] = None
     # Excel-ийн мөрийн дугаар (1-ээс), алдааг хэрэглэгчид заахад хэрэгтэй
     body["source_row"] = body.index + 1
+    fmt = "prepared" if "src_category" in mapping.values() else "bank"
 
     warnings: list[str] = []
     if y is None:
@@ -151,7 +182,21 @@ def read_statement(
             return None
 
     body["date"] = body["date_raw"].map(_parse)
-    body["amount"] = pd.to_numeric(body["amount_raw"], errors="coerce")
+    amount = pd.to_numeric(body["amount_raw"], errors="coerce")
+    debit = pd.to_numeric(body["debit_raw"], errors="coerce").fillna(0).abs()
+    credit = pd.to_numeric(body["credit_raw"], errors="coerce").fillna(0).abs()
+    has_dc = body["debit_raw"].notna() | body["credit_raw"].notna()
+    # Чиглэл: дебит/кредит багана эсвэл тэмдэгтэй дүнгээс; бэлтгэсэн хүснэгтэд None
+    direction = pd.Series([None] * len(body), index=body.index, dtype=object)
+    direction[has_dc & (credit > 0)] = "in"
+    direction[has_dc & (debit > 0)] = "out"
+    amount = amount.where(~has_dc, credit - debit)
+    if fmt == "bank":
+        direction = direction.where(direction.notna(),
+                                    amount.map(lambda v: None if pd.isna(v)
+                                               else ("out" if v < 0 else "in")))
+    body["direction_raw"] = direction
+    body["amount"] = amount.abs()
     for c in ["counterparty", "src_category", "src_subcategory", "description"]:
         body[c] = body[c].map(lambda v: " ".join(str(v).split()) if pd.notna(v) else None)
 
@@ -160,7 +205,7 @@ def read_statement(
         y, mo = y or first.year, first.month
 
     return ParsedFile(name=name, year=y, month=mo, frame=body.reset_index(drop=True),
-                      warnings=warnings)
+                      warnings=warnings, fmt=fmt)
 
 
 def read_many(files: list[tuple[str, bytes]] | list[Path]) -> list[ParsedFile]:

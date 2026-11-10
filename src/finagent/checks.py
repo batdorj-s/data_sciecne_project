@@ -1,4 +1,4 @@
-"""R1–R8 шалгалтын дүрэм ба үлдэгдлийн тулгалт (DM2-ийн дүрэмд суурилсан хэсэг).
+"""R1–R9 шалгалтын дүрэм ба үлдэгдлийн тулгалт (DM2-ийн дүрэмд суурилсан хэсэг).
 
 Шалгалт агентаас ӨМНӨ ажиллана. Өндөр түвшний анхааруулга эсвэл тулгалт зөрвөл
 агентийн дүгнэлт "бага итгэл" гэж заавал тэмдэглэгдэнэ (proposal 2.4).
@@ -13,6 +13,7 @@
 | R6  | Нэг өдөр орж-гарсан ижил дүн | low |
 | R7  | Хувийн шинжтэй зардал | low |
 | R8  | Дансны үлдэгдлийн тулгалт | high |
+| R9  | Касс руу гарсан, зарцуулалт нь тайлагдаагүй мөнгө | medium |
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ RULES: dict[str, str] = {
     "R6": "Нэг өдөр орж-гарсан ижил дүн",
     "R7": "Хувийн шинжтэй зардал",
     "R8": "Дансны үлдэгдлийн тулгалт",
+    "R9": "Кассаар дамжсан тайлагдаагүй мөнгө",
 }
 
 # Тохируулж болох босго
@@ -178,6 +180,24 @@ def _r8_reconcile(led: pd.DataFrame, balances: pd.DataFrame | None) -> list[Issu
     return issues
 
 
+def _r9_cash_box(led: pd.DataFrame) -> list[Issue]:
+    """Банкнаас касс руу гарсан мөнгөний зарцуулалт хуулгад харагдахгүй. Кассын дэвтэр
+    оруулаагүй бол тайлангийн зардал дутуу, ашиг илүү харагдаж болзошгүй."""
+    to_cash = (led[Col.LINE] == Line.TRANSFER_TO_CASH.value) | (
+        (led[Col.LINE] == Line.UNCLASSIFIED_OUT.value)
+        & led[Col.DESCRIPTION].fillna("").str.contains("касс", case=False))
+    issues = []
+    for month, g in led[to_cash].groupby(Col.MONTH):
+        total = float(g[Col.AMOUNT].sum())
+        issues.append(Issue(
+            "R9", "medium",
+            f"{month}: банкнаас касс руу {total:,.0f} ₮ гарсан ({len(g)} гүйлгээ). Кассаас "
+            "хийсэн зардал банкны хуулгад харагдахгүй тул тайлангийн зардал дутуу, ашиг илүү "
+            "харагдаж болзошгүй — кассын дэвтрээ оруулна уу.",
+            month, total, g[Col.TXN_ID].tolist()))
+    return issues
+
+
 def run_checks(ledger: pd.DataFrame, balances: pd.DataFrame | None = None) -> list[Issue]:
     issues: list[Issue] = []
     issues += _r1_structure(ledger)
@@ -188,6 +208,7 @@ def run_checks(ledger: pd.DataFrame, balances: pd.DataFrame | None = None) -> li
     issues += _r6_same_day_round_trip(ledger)
     issues += _r7_personal(ledger)
     issues += _r8_reconcile(ledger, balances)
+    issues += _r9_cash_box(ledger)
     return sorted(issues, key=lambda i: (SEVERITY_ORDER[i.severity], i.rule, i.month or ""))
 
 

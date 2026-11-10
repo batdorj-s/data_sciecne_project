@@ -32,7 +32,9 @@ def test_pilot_known_errors_are_caught(issues):
 
 def test_rule_coverage(issues):
     found = {i.rule for i in issues}
-    assert {"R2", "R3", "R4", "R5", "R6", "R7", "R8"} <= found
+    assert {"R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9"} <= found
+    r9 = {i.month: i.amount for i in _rules(issues, "R9")}
+    assert r9 == {"2026-01": 20_600_000, "2026-03": 20_500_000}
     assert not _rules(issues, "R1")  # жишээ өгөгдөл бүтцийн хувьд зөв
     assert len(_rules(issues, "R4")) == 1  # Chimege subscription давхар
 

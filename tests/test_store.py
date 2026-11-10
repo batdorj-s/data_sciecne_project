@@ -17,8 +17,8 @@ def analysis(sample_files, balances):
 
 
 def test_ledger_roundtrip_and_month_replace(store, analysis, balances):
-    n = store.save_ledger("Компани А", analysis.ledger, balances,
-                          {"2026-01-010": "transfer_to_cash"})
+    tid = analysis.ledger["txn_id"].iloc[0]
+    n = store.save_ledger("Компани А", analysis.ledger, balances, {tid: "transfer_to_cash"})
     assert n == 185
     back = store.load_ledger("Компани А")
     assert len(back) == 185

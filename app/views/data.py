@@ -50,8 +50,9 @@ if source == "saved":
 
 if source == "upload":
     with st.container(border=True):
-        st.markdown("**1. Сарын хуулга** — нэг файл = нэг сар. Багана: Өдөр, Харилцагч, Дүн, "
-                    "Ангилал, Дэд ангилал, Тайлбар.")
+        st.markdown("**1. Сарын хуулга** — нэг файл = нэг сар. Бэлтгэсэн хүснэгт (Өдөр, "
+                    "Харилцагч, Дүн, Ангилал, Дэд ангилал, Тайлбар) эсвэл банкны экспорт "
+                    "(Гүйлгээний огноо, Дебит, Кредит, Гүйлгээний утга).")
         uploads = st.file_uploader("Файлууд", type=["xlsx", "csv"], accept_multiple_files=True,
                                    label_visibility="collapsed")
         if uploads:
