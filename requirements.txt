@@ -1,2 +1,2 @@
 # Streamlit Community Cloud болон энгийн суулгалтад
--e .[web]
+-e .[web,agent]

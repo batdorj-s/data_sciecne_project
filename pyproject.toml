@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 web = ["streamlit>=1.40", "plotly>=5.24"]
+agent = ["anthropic>=2.7"]
 dev = ["pytest>=8", "ruff>=0.8"]
 
 [tool.setuptools.packages.find]

@@ -40,7 +40,7 @@
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[web,dev]"
+pip install -e ".[web,agent,dev]"
 streamlit run app/Home.py
 ```
 
