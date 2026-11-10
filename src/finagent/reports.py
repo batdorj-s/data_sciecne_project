@@ -40,7 +40,7 @@ def monthly_summary(ledger: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame({
         "revenue": revenue,
         "sales": m.loc[Line.SALES.value],
-        "opex": opex,
+        "total_expenses": opex,
         "operating_profit": revenue - opex,
         "operating_cash_flow": by_act.loc[Activity.OPERATING.value],
         "financing_cash_flow": by_act.loc[Activity.FINANCING.value],

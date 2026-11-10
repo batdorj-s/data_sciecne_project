@@ -18,6 +18,7 @@ import pandas as pd
 # Байгууллагын хэлбэрийг заадаг, нэр биш үгс — тайлбараас устгахгүй
 _ORG_WORDS = {"ХХК", "ХК", "ТББ", "ББСБ", "БАНК", "САЛБАР", "ИХ", "СУРГУУЛЬ", "КОО", "НҮ"}
 _MIN_TOKEN = 3
+CODE_RE = re.compile(r"CP-\d{3,}")
 
 
 def _name_tokens(name: str) -> set[str]:
@@ -92,13 +93,15 @@ def anonymize_frame(
     out = df.copy()
     codebook = dict(codebook or {})
     for cp in out[counterparty_col].dropna():
-        if cp not in codebook:
+        if CODE_RE.fullmatch(str(cp)):  # аль хэдийн кодлогдсон
+            codebook.setdefault(cp, cp)
+        elif cp not in codebook:
             codebook[cp] = f"CP-{len(codebook) + 1:03d}"
 
     # Тайлбараас зөвхөн хувь хүний нэрийг нууна; байгууллагын нэр (Chimege г.м.) үлдэнэ
     tokens: set[str] = set()
     for cp in codebook:
-        if not is_organization(cp):
+        if not is_organization(cp) and not CODE_RE.fullmatch(cp):
             tokens |= _name_tokens(cp)
 
     desc = out[description_col]

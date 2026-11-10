@@ -91,12 +91,12 @@ class Forecast:
     expenses: dict[str, LineForecast]
 
     @property
-    def opex_base(self) -> float:
+    def expenses_base(self) -> float:
         return sum(f.base for f in self.expenses.values())
 
     @property
     def profit_base(self) -> float:
-        return self.revenue.base - self.opex_base
+        return self.revenue.base - self.expenses_base
 
     @property
     def profit_low(self) -> float:
@@ -117,7 +117,7 @@ class Forecast:
             "months_used": self.months_used,
             "revenue": self.revenue.to_dict(),
             "expenses": {k: v.to_dict() for k, v in self.expenses.items()},
-            "opex_base": self.opex_base,
+            "expenses_base": self.expenses_base,
             "profit_base": self.profit_base,
             "profit_low": self.profit_low,
             "profit_high": self.profit_high,
@@ -154,7 +154,7 @@ def simulate_scenario(fc: Forecast, revenue_pct: float = 0.0,
         "target_month": fc.target_month,
         "assumptions": {"revenue_pct": revenue_pct, "expense_pct": expense_pct},
         "revenue": revenue,
-        "opex": opex,
+        "total_expenses": opex,
         "expenses": lines,
         "profit": profit,
         "margin": profit / revenue if revenue else None,

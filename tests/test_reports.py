@@ -25,6 +25,9 @@ def test_monthly_summary_matches_manual_report(ledger):
     assert s["operating_profit"].round(0).tolist() == [-14_886_153, 10_896_056, 19_213_028]
     assert s["margin"].round(3).tolist() == [-0.356, 0.193, 0.268]
     assert s["txn_count"].sum() == 185
+    # нийт зардал ба ҮАЗ мөр тусдаа багана байх ёстой
+    assert s["total_expenses"].tolist() == pytest.approx([56_683_153, 45_653_944, 52_563_972])
+    assert s["opex"].tolist() == [5_528_817, 1_186_409, 4_742_630]
 
 
 def test_quarter_operating_profit_is_15_2m_not_4_1m(ledger):
