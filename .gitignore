@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Түүхий өгөгдөл: хувь хүний нэр агуулдаг тул репо руу хэзээ ч оруулахгүй
+data/raw/*
+!data/raw/.gitkeep
+*.xlsx
+!data/sample/*.xlsx
+
+# Local
+.env
+.streamlit/secrets.toml
+.DS_Store
