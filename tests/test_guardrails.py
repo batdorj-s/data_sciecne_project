@@ -41,6 +41,8 @@ def test_hallucinated_number_is_caught(results):
     rep = check_faithfulness("Дараа сарын орлого 95.3 сая ₮ болно, маржин 41%.", results)
     assert not rep.ok
     assert len(rep.unmatched) == 2
+    # хэрэгслийн хоёр тооны зөрүүтэй санамсаргүй таарч болохгүй
+    assert not check_faithfulness("ашиг 15.0 сая ₮ болно", results).ok
 
 
 def _rec(impact=1_763_500):

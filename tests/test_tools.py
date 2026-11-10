@@ -66,3 +66,15 @@ def test_raw_names_are_pseudonymized_before_tools(analysis, balances):
     blob = json.dumps([call_tool(raw, n, {"line": "project"} if n == "get_line_trend" else {})
                        for n in TOOLS], ensure_ascii=False)
     assert "БАДМААРАГ" not in blob and "ЧУЛУУНБААТАР" not in blob
+
+
+def test_excel_export(analysis):
+    import io
+
+    import pandas as pd
+
+    from finagent.export import to_excel
+
+    xls = pd.ExcelFile(io.BytesIO(to_excel(analysis)))
+    assert "Орлого-зарлага" in xls.sheet_names and "Гүйлгээ" in xls.sheet_names
+    assert len(pd.read_excel(xls, "Гүйлгээ")) == 185

@@ -128,9 +128,8 @@ def _matches(value: float, unit: str | None, ref: list[float], raw: str | None =
 
 def check_faithfulness(text: str, tool_results: Iterable[dict]) -> FaithfulnessReport:
     ref = list({n for r in tool_results for n in _walk_numbers(r)})
-    # Хэрэгслийн тооны зөрүү/нийлбэрийг агент ихэвчлэн бичдэг тул хос зөрүүг нэмнэ
-    big = [r for r in ref if abs(r) >= 1000]
-    ref += [a - b for a in big for b in big if a != b]
+    # Хос зөрүү/нийлбэрийг санаатайгаар нэмэхгүй: N² тоо санамсаргүй таарц үүсгэнэ.
+    # Агентад хэрэгтэй зөрүүг хэрэгсэл өөрөө буцаана (profit_delta, change_pct г.м.).
     nums = extract_numbers(text)
     unmatched = [raw for raw, val, unit in nums if not _matches(val, unit, ref, raw)]
     return FaithfulnessReport(checked=len(nums), matched=len(nums) - len(unmatched),

@@ -1,0 +1,93 @@
+"""Аппын төлөв: өгөгдлийн эх сурвалж, Analysis-ийг кэшлэх, хүний засвар (overrides)."""
+
+from __future__ import annotations
+
+import io
+from pathlib import Path
+
+import pandas as pd
+import streamlit as st
+
+from finagent.ingest import IngestError, read_many
+from finagent.pipeline import Analysis, load_balances
+
+ROOT = Path(__file__).resolve().parents[1]
+SAMPLE_DIR = ROOT / "data" / "sample"
+
+KEY_FILES = "uploaded_files"  # list[(name, bytes)]
+KEY_BALANCES = "balances"  # DataFrame | None
+KEY_OVERRIDES = "overrides"  # dict[txn_id, line]
+KEY_SOURCE = "source"  # "sample" | "upload"
+
+
+def _init() -> None:
+    st.session_state.setdefault(KEY_SOURCE, "sample")
+    st.session_state.setdefault(KEY_FILES, [])
+    st.session_state.setdefault(KEY_BALANCES, None)
+    st.session_state.setdefault(KEY_OVERRIDES, {})
+
+
+def sample_files() -> list[tuple[str, bytes]]:
+    return [(p.name, p.read_bytes()) for p in sorted(SAMPLE_DIR.glob("transactions_*.xlsx"))]
+
+
+def sample_balances() -> pd.DataFrame:
+    return load_balances(SAMPLE_DIR / "balances.csv")
+
+
+@st.cache_data(show_spinner="Тооцоолж байна…")
+def _analyze(files: tuple[tuple[str, bytes], ...], balances_csv: str | None,
+             overrides: tuple[tuple[str, str], ...]) -> Analysis:
+    balances = pd.read_csv(io.StringIO(balances_csv), dtype={"month": str}) \
+        if balances_csv else None
+    a = Analysis.from_files(list(files), balances, dict(overrides))
+    # cached_property-г урьдчилан тооцож кэшэд хадгална
+    _ = a.summary, a.issues, a.forecast, a.confidence, a.safe_ledger
+    return a
+
+
+def current_files() -> list[tuple[str, bytes]]:
+    _init()
+    return sample_files() if st.session_state[KEY_SOURCE] == "sample" \
+        else st.session_state[KEY_FILES]
+
+
+def current_balances() -> pd.DataFrame | None:
+    _init()
+    if st.session_state[KEY_SOURCE] == "sample":
+        return sample_balances()
+    return st.session_state[KEY_BALANCES]
+
+
+def get_analysis() -> Analysis | None:
+    """Одоогийн өгөгдлөөр Analysis буцаана; файл байхгүй бол None."""
+    files = current_files()
+    if not files:
+        return None
+    balances = current_balances()
+    bal_csv = None
+    if balances is not None and not balances.dropna(subset=["opening", "closing"]).empty:
+        bal_csv = balances.dropna(subset=["opening", "closing"]).to_csv(index=False)
+    overrides = tuple(sorted(st.session_state[KEY_OVERRIDES].items()))
+    try:
+        return _analyze(tuple(files), bal_csv, overrides)
+    except IngestError as e:
+        st.error(f"Файл уншихад алдаа гарлаа: {e}")
+        return None
+
+
+def months_of(files: list[tuple[str, bytes]]) -> list[str]:
+    try:
+        parsed = read_many(files)
+    except IngestError:
+        return []
+    return [f"{p.year:04d}-{p.month:02d}" for p in parsed if p.year and p.month]
+
+
+def set_override(txn_id: str, line: str) -> None:
+    _init()
+    st.session_state[KEY_OVERRIDES][txn_id] = line
+
+
+def clear_overrides() -> None:
+    st.session_state[KEY_OVERRIDES] = {}
