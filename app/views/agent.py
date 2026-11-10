@@ -23,7 +23,8 @@ page_header("AI агент", "Агент тоо зохиохгүй: зөвхөн
                         "тактик бичнэ. Тоо бүрийг автоматаар тулгана.")
 confidence_banner(*a.confidence)
 
-data_key = hashlib.sha256(a.ledger.to_json().encode() + str(a.balances).encode()).hexdigest()
+data_key = hashlib.sha256(a.ledger.to_json(date_format="iso").encode()
+                          + str(a.balances).encode()).hexdigest()
 has_key = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
 with st.container(border=True):

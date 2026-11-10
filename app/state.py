@@ -8,8 +8,10 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from finagent.classify import apply_overrides
 from finagent.ingest import IngestError, read_many
 from finagent.pipeline import Analysis, load_balances
+from finagent.store import Store
 
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLE_DIR = ROOT / "data" / "sample"
@@ -17,7 +19,9 @@ SAMPLE_DIR = ROOT / "data" / "sample"
 KEY_FILES = "uploaded_files"  # list[(name, bytes)]
 KEY_BALANCES = "balances"  # DataFrame | None
 KEY_OVERRIDES = "overrides"  # dict[txn_id, line]
-KEY_SOURCE = "source"  # "sample" | "upload"
+KEY_SOURCE = "source"  # "sample" | "upload" | "saved"
+KEY_COMPANY = "company"  # хадгалсан компанийн нэр (source == "saved")
+KEY_DB_VERSION = "db_version"  # хадгалах бүрт нэмэгдэж кэшийг шинэчилнэ
 
 
 def _init() -> None:
@@ -25,6 +29,31 @@ def _init() -> None:
     st.session_state.setdefault(KEY_FILES, [])
     st.session_state.setdefault(KEY_BALANCES, None)
     st.session_state.setdefault(KEY_OVERRIDES, {})
+    st.session_state.setdefault(KEY_COMPANY, None)
+    st.session_state.setdefault(KEY_DB_VERSION, 0)
+
+
+@st.cache_resource
+def get_store() -> Store:
+    """DATABASE_URL (анхдагч: data/finagent.sqlite)."""
+    return Store()
+
+
+@st.cache_data(show_spinner="Хадгалсан өгөгдлийг ачаалж байна…")
+def _analyze_saved(company: str, overrides: tuple[tuple[str, str], ...],
+                   _version: int) -> Analysis | None:
+    store = get_store()
+    ledger = store.load_ledger(company)
+    if ledger.empty:
+        return None
+    a = Analysis(apply_overrides(ledger, dict(overrides)), store.load_balances(company))
+    _ = a.summary, a.issues, a.forecast, a.confidence, a.safe_ledger
+    return a
+
+
+def bump_db_version() -> None:
+    st.session_state[KEY_DB_VERSION] = st.session_state.get(KEY_DB_VERSION, 0) + 1
+    _analyze_saved.clear()
 
 
 def sample_files() -> list[tuple[str, bytes]]:
@@ -61,6 +90,13 @@ def current_balances() -> pd.DataFrame | None:
 
 def get_analysis() -> Analysis | None:
     """Одоогийн өгөгдлөөр Analysis буцаана; файл байхгүй бол None."""
+    _init()
+    if st.session_state[KEY_SOURCE] == "saved":
+        company = st.session_state[KEY_COMPANY]
+        if not company:
+            return None
+        overrides = tuple(sorted(st.session_state[KEY_OVERRIDES].items()))
+        return _analyze_saved(company, overrides, st.session_state[KEY_DB_VERSION])
     files = current_files()
     if not files:
         return None

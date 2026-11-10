@@ -21,3 +21,4 @@ data/raw/*
 
 # Claude Code local config
 .claude/
+data/*.sqlite

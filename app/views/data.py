@@ -6,10 +6,14 @@ import pandas as pd
 import streamlit as st
 from state import (
     KEY_BALANCES,
+    KEY_COMPANY,
     KEY_FILES,
+    KEY_OVERRIDES,
     KEY_SOURCE,
+    bump_db_version,
     clear_overrides,
     get_analysis,
+    get_store,
     months_of,
 )
 from ui import mnt, month_label, page_header
@@ -19,17 +23,30 @@ page_header(
     "Сар бүрийн банкны гүйлгээний файл (.xlsx) оруулахад систем ангилж, шалгаж, тайлан гаргана.",
 )
 
+SOURCES = ["sample", "upload", "saved"]
 source = st.radio(
     "Өгөгдлийн эх сурвалж",
-    options=["sample", "upload"],
+    options=SOURCES,
     format_func=lambda v: {"sample": "Жишээ: Компани А, 2026 оны I улирал (нууцалсан)",
-                           "upload": "Өөрийн файл оруулах"}[v],
-    index=0 if st.session_state.get(KEY_SOURCE, "sample") == "sample" else 1,
+                           "upload": "Өөрийн файл оруулах",
+                           "saved": "Хадгалсан компани"}[v],
+    index=SOURCES.index(st.session_state.get(KEY_SOURCE, "sample")),
     horizontal=True,
 )
 if source != st.session_state.get(KEY_SOURCE):
     st.session_state[KEY_SOURCE] = source
     clear_overrides()
+
+if source == "saved":
+    names = get_store().list_companies()
+    if not names:
+        st.info("Хадгалсан компани алга. Жишээ эсвэл өөрийн файлаа ачаалаад доороос хадгална уу.")
+        st.stop()
+    cur = st.session_state.get(KEY_COMPANY)
+    company = st.selectbox("Компани", names, index=names.index(cur) if cur in names else 0)
+    if company != cur:
+        st.session_state[KEY_COMPANY] = company
+        clear_overrides()
 
 if source == "upload":
     with st.container(border=True):
@@ -91,5 +108,24 @@ c3.metric("Үлдэгдэл тулгалт", "Тулгарсан" if a.reconcile
 for pf in a.files:
     for w in pf.warnings:
         st.warning(f"{pf.name}: {w}")
+
+# --- Хадгалах ---------------------------------------------------------------------------
+with st.container(border=True):
+    st.markdown("**Хадгалах** — сарын өгөгдөл, үлдэгдэл, засвар болон дараа сарын таамгийг "
+                "хадгална. Дараагийн сарын файл ороход таамгийг бодит дүнтэй харьцуулна.")
+    default = st.session_state.get(KEY_COMPANY) if source == "saved" else (
+        "Компани А (жишээ)" if source == "sample" else "")
+    c1, c2 = st.columns([3, 1])
+    name = c1.text_input("Компанийн нэр", value=default or "", placeholder="ж: Компани А")
+    c2.write("")
+    if c2.button("Хадгалах", type="primary", disabled=not name.strip()):
+        store = get_store()
+        n = store.save_ledger(name.strip(), a.ledger, a.balances,
+                              st.session_state.get(KEY_OVERRIDES))
+        naive = float(a.summary["revenue"].iloc[-1])
+        store.save_forecast(name.strip(), a.forecast, naive_revenue=naive)
+        bump_db_version()
+        st.success(f"{name.strip()}: {n} гүйлгээ ба {a.forecast.target_month}-ийн таамаг "
+                   "хадгалагдлаа.")
 
 st.page_link("views/dashboard.py", label="Дашбоард руу орох", icon="📊")

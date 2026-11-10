@@ -116,17 +116,31 @@ def build_ledger(
         return pd.DataFrame(columns=TXN_COLUMNS)
     ledger = pd.concat(frames, ignore_index=True)
 
+    ledger[Col.AMOUNT] = ledger[Col.AMOUNT].astype(float)
+    ledger = apply_overrides(ledger, overrides)
+    return ledger[TXN_COLUMNS].sort_values([Col.DATE, Col.SOURCE_ROW], kind="stable").reset_index(
+        drop=True)
+
+
+# Мөр бүрийн мөнгөний чиглэл (хүн ангиллыг өөрчлөхөд чиглэл дагаж өөрчлөгдөнө)
+_LINE_DIRECTION = {
+    Line.SALES: IN, Line.OTHER_INCOME: IN, Line.OWNER_LOAN_IN: IN, Line.LOAN_RETURN_IN: IN,
+    Line.PASSTHROUGH_LOAN_IN: IN, Line.TRANSFER_FROM_CASH: IN, Line.UNCLASSIFIED_IN: IN,
+}
+
+
+def apply_overrides(ledger: pd.DataFrame, overrides: dict[str, str] | None) -> pd.DataFrame:
+    """Хүний баталсан ангиллыг хэрэглэж, activity/direction/signed_amount-ийг дахин тооцно."""
+    ledger = ledger.copy()
     if overrides:
         mask = ledger[Col.TXN_ID].isin(overrides)
         ledger.loc[mask, Col.LINE] = ledger.loc[mask, Col.TXN_ID].map(overrides)
         ledger.loc[mask, Col.CLASS_SOURCE] = "manual"
-
+        ledger.loc[mask, Col.DIRECTION] = ledger.loc[mask, Col.LINE].map(
+            lambda x: _LINE_DIRECTION.get(Line(x), OUT))
     ledger[Col.ACTIVITY] = ledger[Col.LINE].map(lambda x: LINE_ACTIVITY[Line(x)].value)
-    ledger[Col.AMOUNT] = ledger[Col.AMOUNT].astype(float)
     ledger[Col.SIGNED] = ledger[Col.AMOUNT].where(ledger[Col.DIRECTION] == IN, -ledger[Col.AMOUNT])
-    return ledger[TXN_COLUMNS].sort_values([Col.DATE, Col.SOURCE_ROW], kind="stable").reset_index(
-        drop=True
-    )
+    return ledger
 
 
 def load_ledger(paths, overrides: dict[str, str] | None = None) -> pd.DataFrame:

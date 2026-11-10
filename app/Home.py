@@ -18,6 +18,7 @@ pages = {
         st.Page("views/reports.py", title="Тайлан", icon="🧾"),
         st.Page("views/checks.py", title="Шалгалт ба ангилал", icon="🔍"),
         st.Page("views/forecast.py", title="Таамаг ба сценари", icon="📈"),
+        st.Page("views/accuracy.py", title="Таамгийн нарийвчлал", icon="🎯"),
         st.Page("views/agent.py", title="AI агент", icon="🤖"),
     ],
 }
