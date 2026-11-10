@@ -31,6 +31,9 @@
 | `finagent.pipeline` | `Analysis` — апп ба агент хуваалцах нэг тооцоо |
 | `finagent.guardrails` | Faithfulness, зөвлөмжийн бүтэц, итгэлийн түвшин |
 | `finagent.export` | Excel тайлан |
+| `finagent.agent` | DM4: Claude tool use агент (`claude-opus-5-5`) |
+| `finagent.store` | Хадгалалт (SQLite / PostgreSQL), таамаг ↔ бодит дүн, үнэлгээ |
+| `finagent.ml` | DM1 ангилагч, DM2 Isolation Forest + алдаа суулгах |
 
 Вэб апп (`app/`): **Өгөгдөл → Дашбоард → Тайлан → Шалгалт ба ангилал → Таамаг ба сценари → AI агент**.
 
@@ -41,7 +44,15 @@
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[web,agent,dev]"
+export ANTHROPIC_API_KEY=...        # AI агентэд (заавал биш)
+export DATABASE_URL=postgresql+psycopg://...   # заавал биш; анхдагч: data/finagent.sqlite
 streamlit run app/Home.py
+```
+
+ML загваруудын үнэлгээ:
+
+```bash
+python -m finagent.ml.classifier
 ```
 
 Тест:
@@ -67,8 +78,8 @@ python scripts/anonymize_raw.py path/to/sar_1.xlsx path/to/sar_2.xlsx path/to/sa
 | Sprint | Агуулга | Төлөв |
 |---|---|---|
 | 1 | Бизнесийн ойлголт, ангиллын схем | ✅ суурь схем |
-| 2 | Өгөгдөл, EDA | ⏳ |
-| 3 | DM1 ангилал, DM2 шалгалт | ✅ дүрэмд суурилсан хувилбар, ⏳ ML загвар |
-| 4 | DM3 таамаг, DM4 агент | ✅ суурь таамаг, хэрэгслүүд, guardrails · ⏳ LLM холболт |
-| 5 | Үнэлгээ | ⏳ |
+| 2 | Өгөгдөл, EDA | ✅ банкны экспорт, хадгалалт · ⏳ 1,000+ шошго |
+| 3 | DM1 ангилал, DM2 шалгалт | ✅ R1–R9, TF-IDF+LogReg, Isolation Forest |
+| 4 | DM3 таамаг, DM4 агент | ✅ суурь таамаг, Claude агент, guardrails · ⏳ ETS (6+ сар) |
+| 5 | Үнэлгээ | ✅ MAPE/coverage, үнэлгээний UI, алдаа суулгах · ⏳ бодит хэрэглэгчийн үнэлгээ |
 | 6 | Вэб MVP | ✅ эхний хувилбар |

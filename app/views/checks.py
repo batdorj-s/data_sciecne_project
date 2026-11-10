@@ -136,7 +136,7 @@ with tab_model:
         sug = suggest(get_classifier(), target).merge(
             target[["txn_id", "date", "amount", "direction", "description", "line",
                     "class_source"]], on="txn_id")
-        sug.insert(0, "Батлах", ~sug["confident"] & (sug["predicted"] != sug["line"]))
+        sug.insert(0, "Батлах", sug["predicted"] != sug["line"])
         edited_s = st.data_editor(
             sug[["Батлах", "txn_id", "date", "amount", "direction", "description", "line",
                  "predicted", "proba", "class_source"]],
