@@ -53,3 +53,17 @@ def test_feedback(store):
     store.add_feedback("Компани А", "issue", "R7:2026-03-001", "false")
     assert len(store.load_feedback("Компани А")) == 2
     assert store.load_feedback("Компани А", "tactic")["value"].tolist() == ["feasible"]
+
+
+def test_feedback_summary_uses_latest_vote(store):
+    from finagent.store import feedback_summary
+
+    store.add_feedback("К", "tactic", "t1", "not_feasible")
+    store.add_feedback("К", "tactic", "t1", "feasible")
+    store.add_feedback("К", "tactic", "t2", "not_feasible")
+    store.add_feedback("К", "issue", "R7:2026-03:x", "false")
+    store.add_feedback("К", "issue", "R3:2026-01:y", "real")
+    s = feedback_summary(store.load_feedback("К"))
+    assert s["tactic_n"] == 2 and s["tactic_feasible"] == 0.5
+    assert s["issue_precision"] == 0.5
+    assert s["issue_precision_by_rule"] == {"R3": 1.0, "R7": 0.0}

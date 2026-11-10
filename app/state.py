@@ -141,3 +141,22 @@ def set_override(txn_id: str, line: str) -> None:
 
 def clear_overrides() -> None:
     st.session_state[KEY_OVERRIDES] = {}
+
+
+SAMPLE_COMPANY = "Компани А (жишээ)"
+KEY_UPLOAD_COMPANY = "upload_company"
+
+
+def current_company() -> str | None:
+    """Үнэлгээ хадгалах компанийн нэр (өөрийн файлд Өгөгдөл хуудсанд хадгалсны дараа)."""
+    _init()
+    src = st.session_state[KEY_SOURCE]
+    if src == "saved":
+        return st.session_state[KEY_COMPANY]
+    if src == "sample":
+        return SAMPLE_COMPANY
+    return st.session_state.get(KEY_UPLOAD_COMPANY)
+
+
+def issue_ref(issue) -> str:
+    return f"{issue.rule}:{issue.month or ''}:{','.join(sorted(issue.txn_ids))[:150]}"

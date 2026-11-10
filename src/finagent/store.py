@@ -142,8 +142,12 @@ class Store:
                              ).inserted_primary_key[0]
 
     def list_companies(self) -> list[str]:
+        """Гүйлгээ хадгалсан компаниуд (зөвхөн үнэлгээтэй компани орохгүй)."""
+        q = (select(companies.c.name).where(
+            select(transactions.c.txn_id).where(transactions.c.company_id == companies.c.id)
+            .exists()).order_by(companies.c.name))
         with self.engine.connect() as c:
-            return [r[0] for r in c.execute(select(companies.c.name).order_by(companies.c.name))]
+            return [r[0] for r in c.execute(q)]
 
     # --- ledger ---------------------------------------------------------------------
     def save_ledger(self, company: str, ledger: pd.DataFrame,
@@ -247,6 +251,25 @@ class Store:
             q = q.where(feedback.c.kind == kind)
         with self.engine.connect() as c:
             return pd.read_sql(q, c)
+
+
+def feedback_summary(fb: pd.DataFrame) -> dict:
+    """Сүүлийн үнэлгээгээр (ref бүрт нэг) BO3 ба DM2-ийн хэмжүүр."""
+    if fb.empty:
+        return {}
+    last = fb.sort_values("created_at").groupby(["kind", "ref"]).tail(1)
+    out = {}
+    t = last[last["kind"] == "tactic"]
+    if not t.empty:
+        out["tactic_n"] = len(t)
+        out["tactic_feasible"] = float((t["value"] == "feasible").mean())
+    i = last[last["kind"] == "issue"]
+    if not i.empty:
+        out["issue_n"] = len(i)
+        out["issue_precision"] = float((i["value"] == "real").mean())
+        rule = i["ref"].str.split(":").str[0]
+        out["issue_precision_by_rule"] = (i["value"] == "real").groupby(rule).mean().to_dict()
+    return out
 
 
 def forecast_accuracy(saved: pd.DataFrame, summary: pd.DataFrame) -> tuple[pd.DataFrame, dict]:

@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
-from state import KEY_OVERRIDES, clear_overrides, get_classifier, set_override
+from state import (
+    KEY_OVERRIDES,
+    clear_overrides,
+    current_company,
+    get_classifier,
+    get_store,
+    issue_ref,
+    set_override,
+)
 from ui import SEVERITY_ICON, SEVERITY_LABEL, mnt, page_header, require_analysis
 
 from finagent.checks import RULES
@@ -24,6 +32,18 @@ tab_issues, tab_ledger, tab_model = st.tabs(
     ["Анхааруулга", "Гүйлгээ ба ангилал", "Загварын санал (DM1)"])
 
 with tab_issues:
+    from finagent.store import feedback_summary
+
+    _company = current_company()
+    _fb = get_store().load_feedback(_company, "issue") if _company else None
+    rated = {}
+    if _fb is not None and not _fb.empty:
+        rated = _fb.sort_values("created_at").groupby("ref")["value"].last().to_dict()
+        summ = feedback_summary(_fb)
+        st.info(f"Нягтлангийн үнэлгээ: {summ['issue_n']} анхааруулга, бодит асуудлын хувь "
+                f"**{summ['issue_precision']:.0%}** (зорилт ≥ 60%).", icon="🧮")
+    if not _company:
+        st.caption("Үнэлгээ хадгалахын тулд **Өгөгдөл** хуудсанд компаниа хадгална уу.")
     f1, f2 = st.columns(2)
     sev = f1.multiselect("Түвшин", ["high", "medium", "low"], default=["high", "medium", "low"],
                          format_func=lambda s: SEVERITY_LABEL[s])
@@ -36,6 +56,20 @@ with tab_issues:
         with st.expander(f"{SEVERITY_ICON[i.severity]} **{i.rule} · {i.title}** — "
                          f"{i.month or ''} {('· ' + mnt(i.amount)) if i.amount else ''}"):
             st.write(i.message)
+            company = current_company()
+            ref = issue_ref(i)
+            prev = rated.get(ref)
+            b1, b2, b3 = st.columns([1, 1, 3])
+            if b1.button("✅ Бодит асуудал", key=f"real_{ref}", disabled=not company,
+                         type="primary" if prev == "real" else "secondary"):
+                get_store().add_feedback(company, "issue", ref, "real")
+                st.rerun()
+            if b2.button("❌ Худал анхааруулга", key=f"false_{ref}", disabled=not company,
+                         type="primary" if prev == "false" else "secondary"):
+                get_store().add_feedback(company, "issue", ref, "false")
+                st.rerun()
+            if prev:
+                b3.caption(f"Таны үнэлгээ: {'бодит' if prev == 'real' else 'худал'}")
             if i.txn_ids:
                 rows = a.ledger[a.ledger["txn_id"].isin(i.txn_ids)]
                 st.dataframe(rows[["txn_id", "date", "counterparty", "amount", "src_category",

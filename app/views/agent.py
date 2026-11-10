@@ -7,6 +7,7 @@ import json
 import os
 
 import streamlit as st
+from state import current_company, get_store
 from ui import confidence_banner, mnt, page_header, require_analysis
 
 from finagent.guardrails import check_faithfulness
@@ -71,12 +72,33 @@ if stored and stored[0] == data_key:
                 for x in rec.get("risks", []):
                     st.markdown(f"- {x}")
         st.markdown("#### Тактик")
+        company = current_company()
+        from finagent.store import feedback_summary
+
+        fb = get_store().load_feedback(company, "tactic") if company else None
+        rated = ({} if fb is None or fb.empty
+                 else fb.sort_values("created_at").groupby("ref")["value"].last().to_dict())
         for i, t in enumerate(rec.get("tactics", []), 1):
             with st.container(border=True):
                 left, right = st.columns([4, 1])
                 left.markdown(f"**{i}. {t['action']}**  \nKPI: {t['kpi']}")
                 right.metric("Ашгийн нөлөө", mnt(t["impact_mnt"]))
                 right.caption(PRIORITY.get(t["priority"], t["priority"]))
+                ref = t["action"][:200]
+                prev = rated.get(ref)
+                c1, c2, c3 = left.columns([1, 1, 2])
+                if c1.button("👍 Хэрэгжүүлэх боломжтой", key=f"tf_{i}", disabled=not company,
+                             type="primary" if prev == "feasible" else "secondary"):
+                    get_store().add_feedback(company, "tactic", ref, "feasible")
+                    st.rerun()
+                if c2.button("👎 Боломжгүй", key=f"tn_{i}", disabled=not company,
+                             type="primary" if prev == "not_feasible" else "secondary"):
+                    get_store().add_feedback(company, "tactic", ref, "not_feasible")
+                    st.rerun()
+        if fb is not None and not fb.empty:
+            summ = feedback_summary(fb)
+            st.info(f"Эзний үнэлгээ: {summ['tactic_n']} тактик, хэрэгжүүлэх боломжтой "
+                    f"**{summ['tactic_feasible']:.0%}** (зорилт ≥ 70%).", icon="🧮")
         if rec.get("data_warnings"):
             st.warning("**Өгөгдлийн анхааруулга**\n\n" + "\n".join(
                 f"- {w}" for w in rec["data_warnings"]))

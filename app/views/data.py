@@ -115,7 +115,7 @@ with st.container(border=True):
     st.markdown("**Хадгалах** — сарын өгөгдөл, үлдэгдэл, засвар болон дараа сарын таамгийг "
                 "хадгална. Дараагийн сарын файл ороход таамгийг бодит дүнтэй харьцуулна.")
     default = st.session_state.get(KEY_COMPANY) if source == "saved" else (
-        "Компани А (жишээ)" if source == "sample" else "")
+        "Компани А (жишээ)" if source == "sample" else st.session_state.get("upload_company"))
     c1, c2 = st.columns([3, 1])
     name = c1.text_input("Компанийн нэр", value=default or "", placeholder="ж: Компани А")
     c2.write("")
@@ -126,6 +126,7 @@ with st.container(border=True):
         naive = float(a.summary["revenue"].iloc[-1])
         store.save_forecast(name.strip(), a.forecast, naive_revenue=naive)
         bump_db_version()
+        st.session_state["upload_company"] = name.strip()
         st.success(f"{name.strip()}: {n} гүйлгээ ба {a.forecast.target_month}-ийн таамаг "
                    "хадгалагдлаа.")
 
