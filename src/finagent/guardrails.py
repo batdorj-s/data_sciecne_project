@@ -35,11 +35,11 @@ RECOMMENDATION_SCHEMA = {
             "type": "array", "minItems": 3, "maxItems": 6,
             "items": {
                 "type": "object",
-                "required": ["action", "kpi", "impact_mnt", "priority"],
+                "required": ["action", "kpi", "impact_mln", "priority"],
                 "properties": {
                     "action": {"type": "string"},
                     "kpi": {"type": "string"},
-                    "impact_mnt": {"type": "number"},
+                    "impact_mln": {"type": "number"},
                     "priority": {"type": "string", "enum": ["high", "medium", "low"]},
                 },
             },
@@ -64,17 +64,29 @@ class FaithfulnessReport:
         return not self.unmatched
 
 
-def _walk_numbers(obj) -> Iterable[float]:
+# Хэрэгслүүд мөнгөн дүнг сая ₮-өөр (2 оронтой) буцаадаг; ₮-өөр бичсэн тоог тулгах хүлцэл
+MLN_RESOLUTION_MNT = 5_000
+
+
+def _is_pct_key(key: str | None) -> bool:
+    return bool(key) and ("%" in key or "хувь" in key)
+
+
+def _walk_numbers(obj, key: str | None = None) -> Iterable[float]:
+    """Хэрэгслийн гаралтын бүх тоо. `_%` түлхүүртэй нь хувь хэвээр; бусад нь сая ₮ гэж үзэж
+    ₮ руу (×1e6) хөрвүүлсэн утгыг ч нэмнэ."""
     if isinstance(obj, bool):
         return
     if isinstance(obj, (int, float)):
         yield float(obj)
+        if not _is_pct_key(key):
+            yield float(obj) * 1e6
     elif isinstance(obj, dict):
-        for v in obj.values():
-            yield from _walk_numbers(v)
+        for k, v in obj.items():
+            yield from _walk_numbers(v, str(k))
     elif isinstance(obj, (list, tuple)):
         for v in obj:
-            yield from _walk_numbers(v)
+            yield from _walk_numbers(v, key)
 
 
 def _parse_num(raw: str) -> float:
@@ -115,7 +127,7 @@ def _tolerance(raw: str | None, unit: str | None) -> float:
         return half
     if unit in _SCALE:
         return half * _SCALE[unit]
-    return 1.0
+    return MLN_RESOLUTION_MNT
 
 
 def _matches(value: float, unit: str | None, ref: list[float], raw: str | None = None) -> bool:
@@ -137,7 +149,7 @@ def check_faithfulness(text: str, tool_results: Iterable[dict]) -> FaithfulnessR
 
 
 def check_recommendation(rec: dict, tool_results: list[dict]) -> FaithfulnessReport:
-    """Зөвлөмжийн текст дэх тоо + тактик бүрийн impact_mnt-ийг хэрэгслийн үр дүнтэй тулгана."""
+    """Зөвлөмжийн текст дэх тоо + тактик бүрийн impact_mln-ийг хэрэгслийн үр дүнтэй тулгана."""
     texts = []
     for key in ("summary", "drivers", "risks", "data_warnings"):
         v = rec.get(key)
@@ -147,13 +159,14 @@ def check_recommendation(rec: dict, tool_results: list[dict]) -> FaithfulnessRep
     rep = check_faithfulness("\n".join(texts), tool_results)
     ref = list({n for r in tool_results for n in _walk_numbers(r)})
     for i, t in enumerate(rec.get("tactics", []), 1):
-        impact = t.get("impact_mnt")
+        impact = t.get("impact_mln")
         if isinstance(impact, (int, float)):
             rep.checked += 1
-            if _matches(float(impact), None, ref) or _matches(float(impact), "сая", ref, "0.0"):
+            # impact_mln = simulate_scenario-ийн "өөрчлөлт" (сая ₮); бичсэн нарийвчлалаар тулгана
+            if _matches(float(impact) * 1e6, "сая", ref, str(impact)):
                 rep.matched += 1
             else:
-                rep.unmatched.append(f"тактик {i} impact_mnt={impact}")
+                rep.unmatched.append(f"тактик {i} impact_mln={impact}")
     return rep
 
 
@@ -167,7 +180,7 @@ def validate_structure(rec: dict) -> list[str]:
     if not 3 <= len(tactics) <= 6:
         errors.append(f"тактик 3–6 байх ёстой (одоо {len(tactics)})")
     for i, t in enumerate(tactics, 1):
-        for key in ("action", "kpi", "impact_mnt", "priority"):
+        for key in ("action", "kpi", "impact_mln", "priority"):
             if key not in t:
                 errors.append(f"тактик {i}: '{key}' алга")
     if rec.get("confidence") not in (None, "low", "medium", "high"):

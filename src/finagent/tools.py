@@ -1,184 +1,265 @@
-"""Агентийн хэрэгслүүд (proposal 2.2).
+"""Агентийн хэрэгслүүд (proposal 2.2, "Хэрэгслийн жишээ").
 
 Агент өгөгдөлд шууд хандахгүй — зөвхөн эдгээр функцийг дуудаж жижиг JSON авна.
-Мөнгөн дүнг бүхэл ₮-өөр, хувийг 0–1 бутархайгаар (3 оронтой) буцаана.
-Харилцагчийн нэр хэзээ ч гарахгүй: зөвхөн `CP-###` код эсвэл "харилцагч #1".
+Гаралтын хэлбэр proposal-ийн жишээтэй ижил:
+    - түлхүүр нь монгол, мөнгөн дүн **сая ₮**, 2 оронтой (41.80), хувь нь `_%` (17.4)
+    - харилцагчийн нэр гарахгүй (CP-### код), төслийн нэрийг "Төсөл А" болгон нууцална
+Оролтод мөрийн монгол нэр ("Төслийн зардал") болон дотоод түлхүүр ("project") хоёулаа болно.
 
 `TOOL_SPECS` нь LLM-ийн tool use-д шууд дамжуулах JSON schema.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import Any
 
 import pandas as pd
 
+from .checks import RULES
 from .forecast import simulate_scenario as _simulate
 from .pipeline import Analysis
+from .projects import detect_projects, project_totals
 from .schema import EXPENSE_LINES, Col, Line, line_label
 
+UNIT = "сая ₮"
+LEVELS = {"high": "өндөр", "medium": "дунд", "low": "бага"}
+LEVEL_IN = {"өндөр": "high", "дунд": "medium", "бага": "low", "high": "high",
+            "medium": "medium", "low": "low"}
 
-def _money(x) -> int | None:
-    return None if x is None or pd.isna(x) else int(round(float(x)))
+# Дүрмийн богино нэр (proposal-ийн жишээ: "R2 Ангилагдаагүй", "R7 Орлого давхар бүртгэгдэх")
+RULE_SHORT = {
+    "R1": "Бүтэц", "R2": "Ангилагдаагүй", "R3": "Давхардал", "R4": "Зээлийн хүү холилдсон",
+    "R5": "Нэг өдөр орж-гарсан", "R6": "Хувийн шинжтэй зардал",
+    "R7": "Орлого давхар бүртгэгдэх", "R8": "Үлдэгдэл тулгарахгүй", "R9": "Кассаар дамжсан",
+    "A1": "Хэвийн бус гүйлгээ",
+}
+
+# Сэдвийн шошго (төсөлгүй том гүйлгээнд)
+_TOPICS = [(r"зар сурталчилгаа|zar surtalchilgaa|advert", "Зар сурталчилгаа"),
+           (r"зураг авалт|zurag awalt", "Зураг авалт"),
+           (r"цалин|tsalin", "Цалин"), (r"түрээс|turees", "Түрээс")]
 
 
-def _pct(x) -> float | None:
-    return None if x is None or pd.isna(x) else round(float(x), 3)
+def _mln(x) -> float | None:
+    return None if x is None or pd.isna(x) else round(float(x) / 1e6, 2)
+
+
+def _pct(x, digits: int = 1) -> float | None:
+    return None if x is None or pd.isna(x) else round(float(x) * 100, digits)
+
+
+def _month_no(m: str) -> str:
+    return str(int(m.split("-")[1]))
+
+
+def _short_date(d) -> str:
+    return f"{d.month}/{d.day}"
+
+
+def _line_aliases() -> dict[str, str]:
+    out = {"revenue": "revenue", "нийт орлого": "revenue", "орлого": "revenue"}
+    for ln in Line:
+        label = line_label(ln)
+        for alias in {ln.value, label, label.split(" (")[0]}:
+            out[alias.lower()] = ln.value
+    out.update({"үаз": Line.OPEX.value, "оффис": Line.OFFICE.value, "цалин": Line.PAYROLL.value,
+                "төсөл": Line.PROJECT.value, "түрээс": Line.RENT.value})
+    return out
+
+
+LINE_ALIASES = _line_aliases()
+EXPENSE_LABELS = {line_label(ln).split(" (")[0]: ln.value for ln in EXPENSE_LINES}
+
+
+def resolve_line(name: str) -> str | None:
+    return LINE_ALIASES.get(str(name).strip().lower())
 
 
 # ---------------------------------------------------------------------------------------
 def get_quarter_overview(a: Analysis) -> dict:
     """Улирлын сар бүрийн орлого, зардал, ашиг, маржин, мөнгөн урсгал, анхааруулгын тоо."""
     s = a.summary.tail(3)
-    issues_by_month: dict[str, dict[str, int]] = {}
-    for i in a.issues:
-        bucket = issues_by_month.setdefault(i.month or "all", {"high": 0, "medium": 0, "low": 0})
-        bucket[i.severity] += 1
-    months = []
-    for m, r in s.iterrows():
-        months.append({
-            "month": m,
-            "revenue": _money(r["revenue"]),
-            "total_expenses": _money(r["total_expenses"]),
-            "operating_profit": _money(r["operating_profit"]),
-            "margin": _pct(r["margin"]),
-            "operating_cash_flow": _money(r["operating_cash_flow"]),
-            "financing_cash_flow": _money(r["financing_cash_flow"]),
-            "net_cash_change": _money(r["net_cash_change"]),
-            "transactions": int(r["txn_count"]),
-            "issues": issues_by_month.get(m, {"high": 0, "medium": 0, "low": 0}),
-        })
     rev, prof = s["revenue"].sum(), s["operating_profit"].sum()
+    counts = {"өндөр": 0, "дунд": 0, "бага": 0}
+    for i in a.issues:
+        counts[LEVELS[i.severity]] += 1
+    gap = _reconciliation_gap(a)
     level, reasons = a.confidence
     return {
-        "months": months,
-        "quarter": {
-            "revenue": _money(rev),
-            "total_expenses": _money(s["total_expenses"].sum()),
-            "operating_profit": _money(prof),
-            "margin": _pct(prof / rev if rev else None),
-        },
-        "reconciled": a.reconciled,
-        "confidence": level,
-        "confidence_reasons": reasons,
-        "basis": "мөнгөн суурь (НББОУС-ийн тайланг орлохгүй)",
+        "сар": [_month_no(m) for m in s.index],
+        "орлого": [_mln(v) for v in s["revenue"]],
+        "зардал": [_mln(v) for v in s["total_expenses"]],
+        "ашиг": [_mln(v) for v in s["operating_profit"]],
+        "маржин_%": [_pct(v) for v in s["margin"]],
+        "үйл_ажиллагааны_мөнгөн_урсгал": [_mln(v) for v in s["operating_cash_flow"]],
+        "санхүүгийн_мөнгөн_урсгал": [_mln(v) for v in s["financing_cash_flow"]],
+        "улирал": {"орлого": _mln(rev), "ашиг": _mln(prof),
+                   "маржин_%": _pct(prof / rev if rev else None)},
+        "анхааруулга": counts,
+        "тулгалтын_зөрүү": gap["зөрүү"] if gap else None,
+        "итгэл": LEVELS[level],
+        "итгэлийн_шалтгаан": reasons,
+        "нэгж": UNIT,
     }
+
+
+def _reconciliation_gap(a: Analysis) -> dict | None:
+    r8 = [i for i in a.issues if i.rule == "R8" and i.amount]
+    if not r8:
+        return None
+    return {"зөрүү": _mln(sum(abs(i.amount) for i in r8)),
+            "үүссэн_сар": ", ".join(_month_no(i.month) for i in r8 if i.month)}
+
+
+def _topic(desc: str | None) -> str | None:
+    d = (desc or "").lower()
+    return next((label for pat, label in _TOPICS if re.search(pat, d)), None)
 
 
 def get_line_trend(a: Analysis, line: str, top_n: int = 5) -> dict:
-    """Нэг мөрийн сар бүрийн дүн ба хамгийн том гүйлгээнүүд."""
-    valid = {ln.value for ln in Line} | {"revenue"}
-    if line not in valid:
-        return {"error": f"Тодорхойгүй мөр '{line}'. Боломжит: {sorted(valid)}"}
+    """Нэг мөрийн сар бүрийн дүн, хамгийн том гүйлгээнүүд, (төслийн мөрөнд) төслөөр."""
+    key = resolve_line(line)
+    if key is None:
+        options = sorted({line_label(ln).split(" (")[0] for ln in Line} | {"Нийт орлого"})
+        return {"error": f"Тодорхойгүй мөр '{line}'. Боломжит: {options}"}
     led = a.safe_ledger
-    if line == "revenue":
+    if key == "revenue":
         rows = led[led[Col.LINE].isin([Line.SALES.value, Line.OTHER_INCOME.value])]
         label = "Нийт орлого"
     else:
-        rows = led[led[Col.LINE] == line]
-        label = line_label(line)
-    by_month = rows.groupby(Col.MONTH)[Col.AMOUNT].sum().reindex(a.months, fill_value=0.0)
-    changes = by_month.pct_change().replace([float("inf"), float("-inf")], pd.NA)
-    top = rows.nlargest(top_n, Col.AMOUNT)
-    return {
-        "line": line,
-        "label": label,
-        "monthly": [{"month": m, "amount": _money(v), "change_pct": _pct(c)}
-                    for (m, v), c in zip(by_month.items(), changes, strict=True)],
-        "top_transactions": [{
-            "txn_id": r.txn_id, "date": r.date.strftime("%Y-%m-%d"),
-            "counterparty": r.counterparty,
-            "amount": _money(r.amount), "description": r.description,
-        } for r in top.itertuples(index=False)],
+        rows = led[led[Col.LINE] == key]
+        label = line_label(key).split(" (")[0]
+    months = a.months[-3:]
+    by_month = rows.groupby(Col.MONTH)[Col.AMOUNT].sum().reindex(months, fill_value=0.0)
+    q_rows = rows[rows[Col.MONTH].isin(months)]
+    projects = detect_projects(led)
+    top = q_rows.nlargest(top_n, Col.AMOUNT)
+    out: dict[str, Any] = {
+        "мөр": label,
+        "сар": [_month_no(m) for m in months],
+        "сарын_дүн": [_mln(v) for v in by_month],
+        "улирал": _mln(q_rows[Col.AMOUNT].sum()),
+        "хамгийн_том_5": [[_short_date(r[Col.DATE]), _mln(r[Col.AMOUNT]),
+                           projects.get(i) if pd.notna(projects.get(i))
+                           else (_topic(r[Col.DESCRIPTION]) or r[Col.COUNTERPARTY])]
+                          for i, r in top.iterrows()],
     }
+    if key == Line.PROJECT.value:
+        out["төслөөр"] = {k: _mln(v) for k, v in project_totals(q_rows).items()}
+    out["нэгж"] = UNIT
+    return out
 
 
 def get_baseline_forecast(a: Analysis) -> dict:
-    """Мөр бүрийн дараа сарын суурь, доод, дээд таамаг."""
+    """Дараа сарын орлого, зардлын (нийт ба мөр бүрийн) суурь, доод, дээд таамаг."""
     fc = a.forecast
     level, reasons = a.confidence
 
-    def _lf(f):
-        return {"label": f.label, "base": _money(f.base), "low": _money(f.low),
-                "high": _money(f.high), "history": [_money(v) for v in f.history]}
+    def _rng(base, low, high):
+        return {"суурь": _mln(base), "доод": _mln(low), "дээд": _mln(high)}
 
     return {
-        "target_month": fc.target_month,
-        "method": fc.method,
-        "months_used": fc.months_used,
-        "revenue": _lf(fc.revenue),
-        "expenses": {k: _lf(v) for k, v in fc.expenses.items()},
-        "total_expenses_base": _money(fc.expenses_base),
-        "profit": {"base": _money(fc.profit_base), "low": _money(fc.profit_low),
-                   "high": _money(fc.profit_high)},
-        "margin_base": _pct(fc.margin_base),
-        "confidence": level,
-        "confidence_reasons": reasons,
+        "сар": fc.target_month,
+        "арга": "жинлэсэн дундаж 1:2:3 + шугаман чиг хандлага",
+        "орлого": _rng(fc.revenue.base, fc.revenue.low, fc.revenue.high),
+        "зардал": _rng(fc.expenses_base, fc.expenses_low, fc.expenses_high),
+        "ашиг": {"суурь": _mln(fc.profit_base), "маржин_%": _pct(fc.margin_base)},
+        "мөрөөр": {line_label(k).split(" (")[0]: _rng(f.base, f.low, f.high)
+                   for k, f in fc.expenses.items()},
+        "итгэл": LEVELS[level],
+        "итгэлийн_шалтгаан": reasons,
+        "нэгж": UNIT,
     }
 
 
-def simulate_scenario(a: Analysis, revenue_pct: float = 0.0,
-                      expense_pct: dict[str, float] | None = None) -> dict:
-    """Орлого, зардлын % өөрчлөлтийн үед дараа сарын ашиг, маржин."""
-    allowed = {ln.value for ln in EXPENSE_LINES} | {"all"}
-    bad = set(expense_pct or {}) - allowed
+def simulate_scenario(a: Analysis, revenue_change_pct: float = 0.0,
+                      cost_change_pct: dict[str, float] | None = None) -> dict:
+    """Орлого, зардлын мөрийн % өөрчлөлтийн үед дараа сарын ашиг, маржин."""
+    expense_pct: dict[str, float] = {}
+    bad = []
+    for name, pct in (cost_change_pct or {}).items():
+        key = "all" if str(name).strip().lower() in {"all", "бүх зардал", "нийт зардал"} \
+            else resolve_line(name)
+        if key not in {*(ln.value for ln in EXPENSE_LINES), "all"}:
+            bad.append(name)
+        else:
+            expense_pct[key] = float(pct)
     if bad:
-        return {"error": f"Тодорхойгүй зардлын мөр: {sorted(bad)}. Боломжит: {sorted(allowed)}"}
-    r = _simulate(a.forecast, revenue_pct, expense_pct)
+        return {"error": f"Тодорхойгүй зардлын мөр: {bad}. Боломжит: "
+                         f"{sorted(EXPENSE_LABELS)} эсвэл 'Бүх зардал'"}
+    r = _simulate(a.forecast, float(revenue_change_pct), expense_pct)
     return {
-        "target_month": r["target_month"],
-        "assumptions": r["assumptions"],
-        "revenue": _money(r["revenue"]),
-        "total_expenses": _money(r["total_expenses"]),
-        "profit": _money(r["profit"]),
-        "margin": _pct(r["margin"]),
-        "base_profit": _money(r["base_profit"]),
-        "profit_delta": _money(r["profit_delta"]),
+        "суурь_ашиг": _mln(r["base_profit"]),
+        "сценари_ашиг": _mln(r["profit"]),
+        "өөрчлөлт": _mln(r["profit_delta"]),
+        "суурь_маржин_%": _pct(a.forecast.margin_base),
+        "сценари_маржин_%": _pct(r["margin"]),
+        "сценари_орлого": _mln(r["revenue"]),
+        "сценари_зардал": _mln(r["total_expenses"]),
+        "нэгж": UNIT,
     }
 
 
 def get_revenue_concentration(a: Analysis) -> dict:
     """Хамгийн том орлогын (борлуулалт) хувь, сарын доторх цаг хугацаа."""
     sales = a.ledger[a.ledger[Col.LINE] == Line.SALES.value]
-    out = []
-    for m in a.months:
+    months = a.months[-3:]
+    n, largest, share, day, top3, late = [], [], [], [], [], []
+    for m in months:
         g = sales[sales[Col.MONTH] == m].sort_values(Col.AMOUNT, ascending=False)
         total = g[Col.AMOUNT].sum()
+        n.append(int(len(g)))
         if g.empty or not total:
-            out.append({"month": m, "sales": 0, "payments": 0})
+            for col in (largest, share, day, top3, late):
+                col.append(None)
             continue
-        top = g.iloc[0]
-        late = g[g[Col.DATE].dt.day > 20][Col.AMOUNT].sum()
-        out.append({
-            "month": m,
-            "sales": _money(total),
-            "payments": int(len(g)),
-            "largest_payment": _money(top[Col.AMOUNT]),
-            "largest_share": _pct(top[Col.AMOUNT] / total),
-            "largest_day": int(top[Col.DATE].day),
-            "top3_share": _pct(g[Col.AMOUNT].head(3).sum() / total),
-            "after_day_20_share": _pct(late / total),
-        })
-    shares = [m["largest_share"] for m in out if "largest_share" in m]
-    trend = None
-    if len(shares) >= 2:
-        trend = "буурч байна" if shares[-1] < shares[0] else "өсөж байна"
-    return {"months": out, "largest_share_trend": trend}
-
-
-def get_data_issues(a: Analysis, min_severity: str = "low") -> dict:
-    """Шалгалтын дүрмээр илэрсэн анхааруулга (түвшинээр)."""
-    order = {"high": 0, "medium": 1, "low": 2}
-    keep = [i for i in a.issues if order[i.severity] <= order.get(min_severity, 2)]
-    counts = {"high": 0, "medium": 0, "low": 0}
-    for i in a.issues:
-        counts[i.severity] += 1
+        largest.append(_mln(g[Col.AMOUNT].iloc[0]))
+        share.append(round(float(g[Col.AMOUNT].iloc[0] / total) * 100))
+        day.append(int(g[Col.DATE].iloc[0].day))
+        top3.append(round(float(g[Col.AMOUNT].head(3).sum() / total) * 100))
+        late.append(round(float(g[g[Col.DATE].dt.day > 20][Col.AMOUNT].sum() / total) * 100))
+    valid = [s for s in share if s is not None]
     return {
-        "counts": counts,
-        "reconciled": a.reconciled,
-        "issues": [{"rule": i.rule, "title": i.title, "severity": i.severity, "month": i.month,
-                    "amount": _money(i.amount), "message": i.message} for i in keep],
+        "сар": [_month_no(m) for m in months],
+        "орлогын_төлбөрийн_тоо": n,
+        "хамгийн_том_төлбөр": largest,
+        "хамгийн_томын_хувь_%": share,
+        "хамгийн_том_төлбөрийн_өдөр": day,
+        "топ3_хувь_%": top3,
+        "20-ноос_хойш_орсон_хувь_%": late,
+        "чиг": None if len(valid) < 2 else ("буурч байна" if valid[-1] < valid[0]
+                                             else "өсөж байна"),
+        "нэгж": UNIT,
+    }
+
+
+def get_data_issues(a: Analysis, level: str | None = None, limit: int = 15) -> dict:
+    """Шалгалтын дүрмээр илэрсэн анхааруулга (түвшинээр)."""
+    sev = LEVEL_IN.get(str(level).strip().lower()) if level else None
+    if level and sev is None:
+        return {"error": f"Тодорхойгүй түвшин '{level}'. Боломжит: Өндөр, Дунд, Бага"}
+    keep = [i for i in a.issues if sev is None or i.severity == sev]
+    dates = a.safe_ledger.set_index(Col.TXN_ID)[Col.DATE]
+    items = []
+    for i in keep[:limit]:
+        d = dates.get(i.txn_ids[0]) if i.txn_ids else None
+        items.append({
+            "дүрэм": f"{i.rule} {RULE_SHORT.get(i.rule, RULES.get(i.rule, ''))}",
+            "огноо": _short_date(d) if d is not None and pd.notna(d)
+            else (_month_no(i.month) + "-р сар" if i.month else None),
+            "дүн": _mln(abs(i.amount)) if i.amount else None,
+            "түвшин": LEVELS[i.severity],
+            "тайлбар": i.message[:160],
+        })
+    if len(keep) > limit:
+        items.append(f"… бусад {len(keep) - limit}")
+    return {
+        "тоо": len(keep),
+        "жагсаалт": items,
+        "тулгалт": _reconciliation_gap(a) or {"зөрүү": 0.0, "үүссэн_сар": None},
+        "нэгж": UNIT,
     }
 
 
@@ -192,46 +273,48 @@ TOOLS: dict[str, Callable[..., dict]] = {
     "get_data_issues": get_data_issues,
 }
 
-_EXPENSE_KEYS = [ln.value for ln in EXPENSE_LINES]
+_LINE_NAMES = ["Нийт орлого", "Борлуулалтын орлого", *EXPENSE_LABELS, "Зээлийн төлбөр"]
 
 TOOL_SPECS: list[dict[str, Any]] = [
     {
         "name": "get_quarter_overview",
-        "description": "Сүүлийн 3 сарын орлого, зардал, ҮА ашиг, маржин, мөнгөн урсгал, "
-                       "анхааруулгын тоо, итгэлийн түвшин. Шинжилгээг үүгээр эхлүүл.",
+        "description": "Улирлын сар бүрийн орлого, зардал, ашиг, маржин, мөнгөн урсгал, "
+                       "анхааруулгын тоо, тулгалтын зөрүү, итгэлийн түвшин (сая ₮). "
+                       "Шинжилгээг үүгээр эхлүүл.",
         "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "get_line_trend",
-        "description": "Нэг мөрийн сар бүрийн дүн, өөрчлөлт, хамгийн том гүйлгээнүүд. "
-                       "Өөрчлөлтийн шалтгаан хайхад.",
+        "description": "Нэг мөрийн (жишээ нь 'Төслийн зардал') сар бүрийн дүн, хамгийн том 5 "
+                       "гүйлгээ; төслийн зардалд төслөөр задаргаа. Өөрчлөлтийн шалтгаан хайхад.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "line": {"type": "string",
-                         "enum": ["revenue"] + [ln.value for ln in Line]},
-                "top_n": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
+                "line": {"type": "string", "description": "Мөрийн нэр",
+                         "enum": _LINE_NAMES},
             },
             "required": ["line"],
         },
     },
     {
         "name": "get_baseline_forecast",
-        "description": "Дараа сарын орлого, зардлын мөр бүрийн суурь/доод/дээд таамаг, "
-                       "ашгийн хүрээ.",
+        "description": "Дараа сарын орлого, нийт зардал, мөр бүрийн суурь/доод/дээд таамаг, "
+                       "суурь ашиг ба маржин. Таамаглалын хүрээнд ашигла.",
         "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "simulate_scenario",
-        "description": "Орлого ба зардлын мөрийн % өөрчлөлтийн үед дараа сарын ашиг, маржин. "
-                       "Тактик бүрийн ₮ нөлөөг үүгээр тооцно.",
+        "description": "Орлого, зардлын өөрчлөлтийн (%) үед дараа сарын ашиг, маржин. "
+                       "Тактик бүрийн ₮ нөлөөг заавал үүгээр тооц.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "revenue_pct": {"type": "number", "description": "жишээ: 5 = +5%"},
-                "expense_pct": {
+                "revenue_change_pct": {"type": "number", "description": "5 = орлого +5%"},
+                "cost_change_pct": {
                     "type": "object",
-                    "properties": {k: {"type": "number"} for k in [*_EXPENSE_KEYS, "all"]},
+                    "description": "Зардлын мөр → % өөрчлөлт, ж: {\"Төслийн зардал\": -10}",
+                    "properties": {k: {"type": "number"}
+                                   for k in [*EXPENSE_LABELS, "Бүх зардал"]},
                     "additionalProperties": False,
                 },
             },
@@ -239,16 +322,17 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "get_revenue_concentration",
-        "description": "Сар бүрийн хамгийн том борлуулалтын төлбөрийн хувь, топ-3 хувь, "
-                       "сарын сүүлд орсон хувь. Орлогын эрсдэл үнэлэхэд.",
+        "description": "Сар бүрийн орлогын төлбөрийн тоо, хамгийн том төлбөр ба түүний хувь, "
+                       "сарын доторх цаг хугацаа. Орлогын эрсдэл үнэлэхэд.",
         "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "get_data_issues",
-        "description": "R1–R9 шалгалтын анхааруулга. Итгэлийн түвшин тогтооход.",
+        "description": "Шалгалтын дүрмээр (R1–R9, A1) илэрсэн анхааруулга ба тулгалтын зөрүү. "
+                       "Итгэлийн түвшин тогтооход.",
         "input_schema": {
             "type": "object",
-            "properties": {"min_severity": {"type": "string", "enum": ["high", "medium", "low"]}},
+            "properties": {"level": {"type": "string", "enum": ["Өндөр", "Дунд", "Бага"]}},
         },
     },
 ]

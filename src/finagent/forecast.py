@@ -95,6 +95,14 @@ class Forecast:
         return sum(f.base for f in self.expenses.values())
 
     @property
+    def expenses_low(self) -> float:
+        return sum(f.low for f in self.expenses.values())
+
+    @property
+    def expenses_high(self) -> float:
+        return sum(f.high for f in self.expenses.values())
+
+    @property
     def profit_base(self) -> float:
         return self.revenue.base - self.expenses_base
 

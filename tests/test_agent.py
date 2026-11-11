@@ -34,7 +34,7 @@ def analysis(sample_files, balances):
 
 
 def _rec(impact, text="Төслийн зардлыг 10% бууруулах", confidence="high"):
-    t = {"action": text, "kpi": "төслийн зардал / орлого", "impact_mnt": impact,
+    t = {"action": text, "kpi": "төслийн зардал / орлого", "impact_mln": impact,
          "priority": "high"}
     return {"trend": "stable_growth", "confidence": confidence,
             "summary": "Орлого 61.7–86.8 сая ₮, суурь ашиг 10.8 сая ₮.",
@@ -46,14 +46,14 @@ def _script(*submits):
     out = [
         _resp(_use(1, "get_quarter_overview", {}), _use(2, "get_baseline_forecast", {})),
         _resp(_use(3, "get_revenue_concentration", {}),
-              _use(4, "simulate_scenario", {"expense_pct": {"project": -10}})),
+              _use(4, "simulate_scenario", {"cost_change_pct": {"Төслийн зардал": -10}})),
     ]
     out += [_resp(_use(10 + i, SUBMIT_TOOL, r)) for i, r in enumerate(submits)]
     return out
 
 
 def test_happy_path_shows_faithful_recommendation(analysis):
-    client = FakeClient(_script(_rec(1_763_500)))
+    client = FakeClient(_script(_rec(1.76)))
     r = run_agent(analysis, client=client)
     assert r.shown and r.error is None
     assert r.faithfulness.ok
@@ -69,15 +69,15 @@ def test_happy_path_shows_faithful_recommendation(analysis):
 
 
 def test_hallucinated_number_gets_one_retry_then_passes(analysis):
-    client = FakeClient(_script(_rec(9_999_999), _rec(1_763_500)))
+    client = FakeClient(_script(_rec(9.99), _rec(1.76)))
     r = run_agent(analysis, client=client)
     assert r.shown
     retry_msg = client.calls[-1]["messages"][-1]["content"][0]
-    assert retry_msg["is_error"] and "9999999" in retry_msg["content"]
+    assert retry_msg["is_error"] and "9.99" in retry_msg["content"]
 
 
 def test_persistent_hallucination_is_hidden(analysis):
-    client = FakeClient(_script(_rec(9_999_999), _rec(8_888_888)))
+    client = FakeClient(_script(_rec(9.99), _rec(8.88)))
     r = run_agent(analysis, client=client)
     assert not r.shown
     assert "харуулахгүй" in r.error
