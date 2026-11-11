@@ -37,11 +37,11 @@ with k1, st.container(border=True):
     st.caption(f"хүрээ {mnt(fc.revenue.low)} … {mnt(fc.revenue.high)}")
 with k2, st.container(border=True):
     st.metric("ҮА зардал (суурь), ₮", mnt(fc.expenses_base, unit=False))
-    st.caption("мөр бүрийн суурь таамгийн нийлбэр")
+    st.caption(f"хүрээ {mnt(fc.expenses_low)} … {mnt(fc.expenses_high)}")
 with k3, st.container(border=True):
     st.metric("ҮА ашиг (суурь), ₮", mnt(fc.profit_base, unit=False))
-    st.caption(f"маржин {pct(fc.margin_base)} · хүрээ {mnt(fc.profit_low)} … "
-               f"{mnt(fc.profit_high)}")
+    st.caption(f"маржин {pct(fc.margin_base)} · орлогын хүрээ өргөн тул ашгийг зөвхөн "
+               "суурь утгаар үзүүлнэ")
 
 # --- Түүх + таамгийн хүрээ ------------------------------------------------------------------
 with st.container(border=True):
@@ -75,8 +75,9 @@ for f in fc.expenses.values():
     rows.append({"Мөр": f.label, **{month_label(m): v for m, v in
                                    zip(fc.months_used, f.history, strict=True)},
                  "Суурь": f.base, "Доод": f.low, "Дээд": f.high})
-rows.append({"Мөр": "ҮА ашиг", "Суурь": fc.profit_base, "Доод": fc.profit_low,
-             "Дээд": fc.profit_high})
+rows.append({"Мөр": "ҮА зардал (нийт)", "Суурь": fc.expenses_base, "Доод": fc.expenses_low,
+             "Дээд": fc.expenses_high})
+rows.append({"Мөр": "ҮА ашиг", "Суурь": fc.profit_base})
 st.dataframe(pd.DataFrame(rows).set_index("Мөр").astype(float)
              .style.format("{:,.0f}", na_rep="—"),
              use_container_width=True)

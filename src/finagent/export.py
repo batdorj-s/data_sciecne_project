@@ -19,8 +19,9 @@ def to_excel(a: Analysis) -> bytes:
                 "Дээд": fc.revenue.high}]
     fc_rows += [{"Мөр": f.label, "Суурь": f.base, "Доод": f.low, "Дээд": f.high}
                 for f in fc.expenses.values()]
-    fc_rows.append({"Мөр": "ҮА ашиг", "Суурь": fc.profit_base, "Доод": fc.profit_low,
-                    "Дээд": fc.profit_high})
+    fc_rows.append({"Мөр": "ҮА зардал (нийт)", "Суурь": fc.expenses_base,
+                    "Доод": fc.expenses_low, "Дээд": fc.expenses_high})
+    fc_rows.append({"Мөр": "ҮА ашиг", "Суурь": fc.profit_base})
     ledger = a.ledger.assign(line_label=a.ledger["line"].map(line_label))
     ledger["date"] = ledger["date"].dt.date
 

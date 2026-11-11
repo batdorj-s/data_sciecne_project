@@ -46,7 +46,8 @@ with k2, st.container(border=True):
     st.caption(f"маржин {pct(prof / rev if rev else None)}")
 with k3, st.container(border=True):
     st.metric(f"{target}: суурь ашиг, ₮", mnt(fc.profit_base, unit=False))
-    st.caption(f"хүрээ {mnt(fc.profit_low)} … {mnt(fc.profit_high)}")
+    st.caption(f"маржин {pct(fc.margin_base)} · зардал {mnt(fc.expenses_low)} … "
+               f"{mnt(fc.expenses_high)}")
 with k4, st.container(border=True):
     st.metric("Анхааруулга", len(a.issues))
     st.caption(f"🔴 {high} өндөр түвшин" if high else "өндөр түвшин алга")
@@ -122,17 +123,21 @@ with c4, st.container(border=True):
     st.plotly_chart(style_layout(fig), use_container_width=True)
 
 # --- Орлогын төвлөрөл ---------------------------------------------------------------------
-conc = get_revenue_concentration(a)["months"][-3:]
+conc = get_revenue_concentration(a)
 with st.container(border=True):
     st.markdown("**Орлогын төвлөрөл** — хамгийн том нэг төлбөр сарын борлуулалтын хэдэн хувь вэ")
-    cols = st.columns(len(conc))
-    for col, m in zip(cols, conc, strict=True):
-        if "largest_share" not in m:
-            col.metric(month_label(m["month"]), "—")
+    cols = st.columns(len(conc["сар"]))
+    for i, col in enumerate(cols):
+        label = f"{conc['сар'][i]}-р сар"
+        share = conc["хамгийн_томын_хувь_%"][i]
+        if share is None:
+            col.metric(label, "—")
             continue
-        col.metric(month_label(m["month"]), pct(m["largest_share"], 0),
-                   help=f"{m['payments']} төлбөр, хамгийн том нь {mnt(m['largest_payment'])} "
-                        f"({m['largest_day']}-нд); топ-3 = {pct(m['top3_share'], 0)}")
-        col.progress(min(1.0, m["largest_share"]))
+        col.metric(label, f"{share}%",
+                   help=f"{conc['орлогын_төлбөрийн_тоо'][i]} төлбөр, хамгийн том нь "
+                        f"{conc['хамгийн_том_төлбөр'][i]:.1f} сая ₮ "
+                        f"({conc['хамгийн_том_төлбөрийн_өдөр'][i]}-нд); "
+                        f"топ-3 = {conc['топ3_хувь_%'][i]}%")
+        col.progress(min(1.0, share / 100))
 
 cash_basis_note()

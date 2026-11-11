@@ -11,8 +11,7 @@ from state import current_company, get_store
 from ui import confidence_banner, mnt, page_header, require_analysis
 
 from finagent.guardrails import check_faithfulness
-from finagent.schema import EXPENSE_LINES, Line
-from finagent.tools import TOOL_SPECS, call_tool
+from finagent.tools import EXPENSE_LABELS, TOOL_SPECS, call_tool
 
 TREND = {"growth": "📈 Өсөлт", "stable": "➡️ Тогтвортой", "decline": "📉 Бууралт",
          "stable_growth": "↗️ Тогтвортой–өсөлт", "stable_decline": "↘️ Тогтвортой–бууралт"}
@@ -82,7 +81,7 @@ if stored and stored[0] == data_key:
             with st.container(border=True):
                 left, right = st.columns([4, 1])
                 left.markdown(f"**{i}. {t['action']}**  \nKPI: {t['kpi']}")
-                right.metric("Ашгийн нөлөө", mnt(t["impact_mnt"]))
+                right.metric("Ашгийн нөлөө", mnt(t["impact_mln"] * 1e6))
                 right.caption(PRIORITY.get(t["priority"], t["priority"]))
                 ref = t["action"][:200]
                 prev = rated.get(ref)
@@ -117,21 +116,26 @@ if stored and stored[0] == data_key:
 
 st.divider()
 st.subheader("Хэрэгслүүд (агентийн харах өгөгдөл)")
+LINE_CHOICES = TOOL_SPECS[1]["input_schema"]["properties"]["line"]["enum"]
 results = []
 for spec in TOOL_SPECS:
     name = spec["name"]
     with st.expander(f"`{name}` — {spec['description']}"):
         args: dict = {}
         if name == "get_line_trend":
-            args["line"] = st.selectbox("line", ["revenue"] + [ln.value for ln in Line],
-                                        key="lt_line")
+            args["line"] = st.selectbox("line", LINE_CHOICES, index=LINE_CHOICES.index(
+                "Төслийн зардал"), key="lt_line")
         elif name == "simulate_scenario":
-            c1, c2 = st.columns(2)
-            args["revenue_pct"] = c1.number_input("revenue_pct", value=0.0, step=1.0)
-            key = c2.selectbox("expense line", [ln.value for ln in EXPENSE_LINES] + ["all"],
-                               index=1)
-            val = c2.number_input("expense_pct", value=-10.0, step=1.0)
-            args["expense_pct"] = {key: val}
+            c1, c2, c3 = st.columns(3)
+            args["revenue_change_pct"] = c1.number_input("revenue_change_pct", value=0.0,
+                                                         step=1.0)
+            key = c2.selectbox("Зардлын мөр", [*EXPENSE_LABELS, "Бүх зардал"],
+                               index=list(EXPENSE_LABELS).index("Төслийн зардал"))
+            args["cost_change_pct"] = {key: c3.number_input("cost_change_pct", value=-10.0,
+                                                            step=1.0)}
+        elif name == "get_data_issues":
+            args["level"] = st.selectbox("level", ["Өндөр", "Дунд", "Бага"], key="di_level")
+        st.code(f"{name}({json.dumps(args, ensure_ascii=False)})", language="python")
         out = call_tool(a, name, args)
         results.append(out)
         st.json(out, expanded=1)
